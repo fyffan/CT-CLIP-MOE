@@ -229,6 +229,11 @@ class VideoDatasetWithLabels(Dataset):
         img_tensor = torch.stack(img_tensor, dim=0)
         img_tensor = img_tensor.unsqueeze(0)  # 增加一个维
 
+        # resize成500*500的大小,
+
+        img_tensor = img_tensor.float()  # 如果不是float类型
+        img_tensor = F.interpolate(img_tensor, size=(500, 500), mode='bilinear', align_corners=False)
+
         return img_tensor
     
     # PET影像处理
@@ -245,6 +250,10 @@ class VideoDatasetWithLabels(Dataset):
         pet_tensor = torch.stack(pet_tensor, dim=0)
         pet_tensor = pet_tensor.unsqueeze(0)  # 增加一个维度
 
+        # resize成500*500的大小
+        pet_tensor = pet_tensor.float()  # 如果不是float类型
+        pet_tensor = F.interpolate(pet_tensor, size=(500, 500), mode='bilinear', align_corners=False)
+        
         return pet_tensor
 
 
@@ -254,11 +263,9 @@ class VideoDatasetWithLabels(Dataset):
         img_path = os.path.join(self.data_path, file_name, 'images')  
         text = self.data_table.iloc[index]['肺结节部位']
 
-        # 如果是单次训练，直接使用文本信息
-        text = [text]
-
         # 读取影像数据
         all_files = os.listdir(img_path)
+        all_files.sort(key=lambda x: int(x.split('.')[-1]))
 
         # CT
         ct_path = os.path.join(img_path, all_files[1])
@@ -269,7 +276,14 @@ class VideoDatasetWithLabels(Dataset):
         ct_length = len(ct_slices_list)
         ct_up = int(ct_length - 1 - self.data_table.iloc[index]['CT上界'])
         ct_down = int(ct_length - 1 - self.data_table.iloc[index]['CT下界'])
-        ct_slices_list_selected = ct_slices_list[ct_up:ct_down + 1]  # 选择指定范围的切片
+
+        # 要能被10整除，如果不能整除，就往下加
+        ct_delta = ct_down - ct_up
+        if ct_delta % 10 != 0:
+            ct_down += (10 - ct_delta % 10)
+            ct_delta = ct_down - ct_up
+
+        ct_slices_list_selected = ct_slices_list[ct_up:ct_down]  # 选择指定范围的切片
         ct_slices_path = [os.path.join(ct_path, f) for f in ct_slices_list_selected] # 读取第一个切片的路径  
         
         ct_imgs = [pydicom.dcmread(f) for f in ct_slices_path]  # 读取指定范围的切片
@@ -285,7 +299,13 @@ class VideoDatasetWithLabels(Dataset):
         pet_up = int(self.data_table.iloc[index]['PET上界'])
         pet_down = int(self.data_table.iloc[index]['PET下界'])
 
-        pet_imgs_selected = pet_imgs[pet_down:pet_up + 1]  # 选择指定范围的切片
+        # 要能被10整除，如果不能整除，就往下加
+        pet_delta = pet_up - pet_down
+        if pet_delta % 10 != 0:
+            pet_up += (10 - pet_delta % 10)
+            pet_delta = pet_up - pet_down
+
+        pet_imgs_selected = pet_imgs[pet_down:pet_up]  # 选择指定范围的切片
 
         pet_tensor = self.process_pet_slices(pet_imgs_selected)
 

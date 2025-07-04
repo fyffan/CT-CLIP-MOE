@@ -7,10 +7,10 @@ from CTCLIPTrainer import CTClipTrainer
 
 # tokenizer = BertTokenizer.from_pretrained('microsoft/BiomedVLP-CXR-BERT-specialized',do_lower_case=True)
 
-tokenizer = BertTokenizer.from_pretrained('/data1/users/fangyifan/Works/Paper_Code/CT-CLIP/pretrained/BiomedVLP-CXR-BERT-specialized', do_lower_case=True)
+tokenizer = BertTokenizer.from_pretrained('/data1/users/fangyifan/Works/Paper_Code/pretrained/BiomedVLP-CXR-BERT-specialized', do_lower_case=True)
 # text_encoder = BertModel.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized")
 
-text_encoder = BertModel.from_pretrained('/data1/users/fangyifan/Works/Paper_Code/CT-CLIP/pretrained/BiomedVLP-CXR-BERT-specialized')
+text_encoder = BertModel.from_pretrained('/data1/users/fangyifan/Works/Paper_Code/pretrained/BiomedVLP-CXR-BERT-specialized')
 
 print("---------")
 print(tokenizer.pad_token_id)
@@ -20,7 +20,7 @@ print("-----------")
 image_encoder = CTViT(
     dim = 512,
     codebook_size = 8192,
-    image_size = 480,
+    image_size = 500,  # 需要改
     patch_size = 20,
     temporal_patch_size = 10,
     spatial_depth = 4,
@@ -35,7 +35,7 @@ image_encoder = CTViT(
 clip = CTCLIP(
     image_encoder = image_encoder,
     text_encoder = text_encoder,
-    dim_text = 768,
+    dim_text = 768,  # 改成512？分词器出来是512维的
     dim_image = 294912,
     dim_latent = 512,
     extra_latent_projection = False,         # whether to use separate projections for text-to-image vs image-to-text comparisons (CLOOB)

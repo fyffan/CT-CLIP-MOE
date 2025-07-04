@@ -406,13 +406,11 @@ def model_forward_with_context(
 
 # main clip class
 
-
-
 class CoCoOpPromptLearner(nn.Module):
-    def __init__(self, ctx_dim=768, n_ctx=8, meta_dim=512, device='cuda'):
+    def __init__(self, ctx_dim=512, n_ctx=128, meta_dim=512, device='cuda'):
         super().__init__()
-        self.n_ctx = n_ctx  # 可学习context tokens的数量
-        self.ctx_dim = ctx_dim  #  context tokens的维度
+        self.n_ctx = n_ctx  # 可学习context tokens的长度
+        self.ctx_dim = ctx_dim  # context tokens的
         self.device = device  # 设备
 
         # 可学习context tokens: [n_ctx, ctx_dim]
@@ -420,30 +418,41 @@ class CoCoOpPromptLearner(nn.Module):
         # 初始化为随机值
 
         # meta-net: 输入影像embedding，输出meta token
+        # 输出的meta token的shape为 [B, ctx_dim]
         self.meta_net = nn.Sequential(
             nn.Linear(meta_dim, ctx_dim),
             nn.Tanh()
         )
 
+        # 如果需要使用多头注意力，可以取消注释以下代码，效果不好时可考虑修改
+        # self.meta_net = nn.MultiheadAttention(
+        #     embed_dim=ctx_dim,
+        #     num_heads=8,
+        #     batch_first=True
+        # )
+
     def forward(self, image_features, class_token_embeds):
         """
-        image_features: [B, meta_dim]
+        image_features: [B, N, meta_dim]
         class_token_embeds: List[Tensor], 每个元素为 [1, seq_len, ctx_dim]，外部已tokenizer+embedding
         """
         B = image_features.shape[0]
+        image_features = image_features.mean(dim=1)  # [B, meta_dim]，如果有多个meta token，取平均
         meta_token = self.meta_net(image_features)  # [B, ctx_dim]
 
         # 条件化context tokens: [B, n_ctx, ctx_dim]
-        ctx_tokens = self.ctx.unsqueeze(0) + meta_token.unsqueeze(1)  # [B, n_ctx, ctx_dim]
+        ctx_tokens = self.ctx.unsqueeze(0) + meta_token.unsqueeze(1) # [B, n_ctx, ctx_dim]
 
         prompts = []
         for class_embeds in class_token_embeds:
             # class_embeds: [1, seq_len, ctx_dim]，如BERT embedding
-            class_embeds = class_embeds.expand(B, -1, -1)  # [B, seq_len, ctx_dim]
+            class_embeds = class_embeds.unsqueeze(0).expand(B, -1, -1)  # [B, seq_len, ctx_dim]
             # 拼接: 条件化context tokens + class token
             prompt = torch.cat([ctx_tokens, class_embeds], dim=1)  # [B, n_ctx+seq_len, ctx_dim]
             prompts.append(prompt)
         # prompts: List，每个类别一个 [B, n_ctx+seq_len, ctx_dim]
+        # 如果需要将所有类别的prompt拼接成一个大tensor，可以取消注释以下代码
+        prompts = torch.cat(prompts, dim=0)  # [B*len(class_token_embeds), n_ctx+seq_len, ctx_dim]
         return prompts
 
 
@@ -499,7 +508,7 @@ class CTCLIP(nn.Module):
             transformer_decoder_depth = 4,
             transformer_decoder_heads = 8,
             # 新增参数
-            n_ctx = 8,  # CoCoOp Prompt Learner的context tokens数量
+            n_ctx = 128,  # CoCoOp Prompt Learner的context tokens数量
             meta_dim = 512,  # meta token的维度
             **kwargs
     ):
@@ -617,7 +626,9 @@ class CTCLIP(nn.Module):
                 nn.Linear(dim_image, dim_latent, bias = False)
             )
         else:
-            self.to_visual_latent = nn.Linear(dim_image, dim_latent, bias = False)
+            # self.to_visual_latent = nn.Linear(dim_image, dim_latent, bias = False)
+            self.to_visual_latent = nn.Linear(4096, dim_latent, bias = False)
+
 
         # temperature
 
@@ -638,11 +649,14 @@ class CTCLIP(nn.Module):
 
         self.multiview_loss_weight = multiview_loss_weight
 
-        self.tokenizer= BertTokenizer.from_pretrained('/data1/users/fangyifan/Works/Paper_Code/CT-CLIP/pretrained/BiomedVLP-CXR-BERT-specialized', do_lower_case=True)
+        self.tokenizer= BertTokenizer.from_pretrained('/data1/users/fangyifan/Works/Paper_Code/pretrained/BiomedVLP-CXR-BERT-specialized', do_lower_case=True)
 
         # ====== 新增模块初始化 ======
 
+        # 添加线性层用于调整嵌入维度
+        self.adjust_dim = nn.Linear(512, self.dim_text)
 
+        # 主题模块初始化
         self.transformer_encoder = TransformerEncoder(
             dim=transformer_expert_dim,
             depth=transformer_encoder_depth,
@@ -671,7 +685,7 @@ class CTCLIP(nn.Module):
             num_experts=transformer_num_experts
         )
         # ====== 其余原有初始化不变 ======
-        
+        self.n_ctx = n_ctx  # CoCoOp Prompt Learner的context tokens数量
         # CoCoOp Prompt Learner
         self.prompt_learner = CoCoOpPromptLearner(
             ctx_dim=dim_text,
@@ -709,6 +723,23 @@ class CTCLIP(nn.Module):
         token_type_ids = buffered_token_type_ids_expanded
         text_embeddings = self.text_transformer.embeddings(input_ids = input_ids, token_type_ids = token_type_ids)
         return text_embeddings
+    
+    def embedding_to_ids(self, embeddings):
+        """
+        将嵌入转回 token ID
+        :param embeddings: [batch_size, seq_length, embedding_dim]，输入嵌入
+        :return: [batch_size, seq_length]，对应的 token ID
+        """
+        # 获取词汇表中所有 token 的嵌入
+        token_embeddings = self.text_transformer.embeddings.word_embeddings.weight  # [vocab_size, embedding_dim]
+
+        # 计算输入嵌入与词汇表中 token 嵌入的相似度
+        similarity = torch.matmul(embeddings, token_embeddings.T)  # [batch_size, seq_length, vocab_size]
+
+        # 找到相似度最高的 token ID
+        token_ids = torch.argmax(similarity, dim=-1)  # [batch_size, seq_length]
+
+        return token_ids
 
     def forward(
             self,
@@ -831,6 +862,7 @@ class CTCLIP(nn.Module):
         # 1. 展平patch特征
         b, t, h, w, d = enc_image.shape
         enc_image_flat = enc_image.view(b, -1, d)  # [b, N, d], N = t*h*w
+        # d维度是512
 
         # 2. Transformer Encoder
         f_enc = self.transformer_encoder(enc_image_flat)  # [b, N, d]
@@ -854,7 +886,7 @@ class CTCLIP(nn.Module):
 
         # 8. 后续处理（如投影到共享空间等）
         enc_image = image_embedding  # 替换原有enc_image，后续流程不变
-
+        # [1, token_num, d]，这里的token_num是可学习的tokens的个数
 
         # text transformer部分
         text_args = (text.input_ids,text.attention_mask)
@@ -862,16 +894,22 @@ class CTCLIP(nn.Module):
         if not self.text_encode_without_mask:
             text_args = (*text_args, text_mask)
 
+        text_embeddings_origin = self.token_embedding(text.input_ids)
+        # 这里调用的是BERT的token_embedding方法，返回的形状为[B, seq_len, dim_text]
+
         # 4. 生成prompt，分别构建prompt?
         # 先试用统一构建text，不分正负样本？原论文没有分别构建
-        new_prompts = self.prompt_learner(enc_image, text.input_ids)  # List，每个元素 [B, n_ctx+seq_len, ctx_dim]
+        new_prompts_embedding = self.prompt_learner(enc_image, text_embeddings_origin)  # List，每个元素 [B, n_ctx+seq_len, ctx_dim]
         # 多个标签的序列
 
+        # 将嵌入转回 ID 值
+        new_prompts_ids = self.embedding_to_ids(new_prompts_embedding)  # [batch_size, seq_length]
 
+        text_attention_mask_new = F.pad(text.attention_mask,(self.n_ctx, 0), value=1)  # 扩展attention mask，前n_ctx个为1
         # text_embeddings = self.text_transformer(text.input_ids, attention_mask = text.attention_mask )
-        text_embeddings = self.text_transformer(new_prompts, attention_mask = text.attention_mask )
+        text_embeddings = self.text_transformer(new_prompts_ids, attention_mask = text_attention_mask_new)
 
-        nc_text = text_embeddings[0]
+        enc_text = text_embeddings[0]
 
         # depending on whether text is using causal mask, post process, moving eos token to the first position
 
@@ -895,13 +933,17 @@ class CTCLIP(nn.Module):
 
         #print("This is visual encoding")
         global h_r, w_r, z_r
-        h_r, w_r, z_r = enc_image.shape[1], enc_image.shape[2], enc_image.shape[3]
+        # h_r, w_r, z_r = enc_image.shape[1], enc_image.shape[2], enc_image.shape[3]
+        h_r, w_r, z_r = t, h, w
+
 
         #enc_image, max_indices = torch.max(enc_image, dim=1)
         enc_image_send = enc_image
+        # 不确定ctvit的输出是否有用？？？
 
-        enc_image = torch.mean(enc_image, dim=1)
+        # enc_image = torch.mean(enc_image, dim=1)
         # 对时序（time）维度做平均池化，slice维度
+        # [b,h,w,d]
 
         #kernel_size = (enc_image.size(1), enc_image.size(2), enc_image.size(3))
 
@@ -918,6 +960,7 @@ class CTCLIP(nn.Module):
 
 
         enc_image = enc_image.view(enc_image.shape[0], -1)
+        # 将图像特征展平，变为 [b, h*w*d] 的形状
 
        # print(enc_image.shape, flush=True)
 
@@ -1059,12 +1102,8 @@ class CTCLIP(nn.Module):
         # loss计算
         # 此处可修改
 
-      
-
-
-
-        text_to_image_loss = (-log(text_to_image_pos) + log(text_to_image_denom)).mean(dim = -1)
-        image_to_text_loss = (-log(image_to_text_pos) + log(image_to_text_denom)).mean(dim = -1)
+        text_to_image_loss = (-log(text_to_image_pos) - log(text_to_image_denom)).mean(dim = -1)
+        image_to_text_loss = (-log(image_to_text_pos) - log(image_to_text_denom)).mean(dim = -1)
 
         # calculate CL loss
 

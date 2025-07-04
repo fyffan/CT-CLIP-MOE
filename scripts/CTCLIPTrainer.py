@@ -51,27 +51,27 @@ def apply_softmax(array):
 
 
 
-def tensor_to_nifti(tensor, path, affine=np.eye(4)):
-    """
-    Save tensor as a NIfTI file.
+# def tensor_to_nifti(tensor, path, affine=np.eye(4)):
+#     """
+#     Save tensor as a NIfTI file.
 
-    Args:
-        tensor (torch.Tensor): The input tensor with shape (D, H, W) or (C, D, H, W).
-        path (str): The path to save the NIfTI file.
-        affine (np.ndarray, optional): The affine matrix for the NIfTI file. Defaults to np.eye(4).
-    """
+#     Args:
+#         tensor (torch.Tensor): The input tensor with shape (D, H, W) or (C, D, H, W).
+#         path (str): The path to save the NIfTI file.
+#         affine (np.ndarray, optional): The affine matrix for the NIfTI file. Defaults to np.eye(4).
+#     """
 
-    tensor = tensor.cpu()
+#     tensor = tensor.cpu()
 
-    if tensor.dim() == 4:
-        # Assume single channel data if there are multiple channels
-        if tensor.size(0) != 1:
-            print("Warning: Saving only the first channel of the input tensor")
-        tensor = tensor.squeeze(0)
-    tensor=tensor.swapaxes(0,2)
-    numpy_data = tensor.detach().numpy().astype(np.float32)
-    nifti_img = nib.Nifti1Image(numpy_data, affine)
-    nib.save(nifti_img, path)
+#     if tensor.dim() == 4:
+#         # Assume single channel data if there are multiple channels
+#         if tensor.size(0) != 1:
+#             print("Warning: Saving only the first channel of the input tensor")
+#         tensor = tensor.squeeze(0)
+#     tensor=tensor.swapaxes(0,2)
+#     numpy_data = tensor.detach().numpy().astype(np.float32)
+#     nifti_img = nib.Nifti1Image(numpy_data, affine)
+#     nib.save(nifti_img, path)
 
 def exists(val):
     return val is not None
@@ -179,13 +179,13 @@ class CTClipTrainer(nn.Module):
         if tokenizer != None:
             self.tokenizer=tokenizer
         else:
-            self.tokenizer=BertTokenizer.from_pretrained('/data1/users/fangyifan/Works/Paper_Code/CT-CLIP/pretrained/BiomedVLP-CXR-BERT-specialized', do_lower_case=True)
+            self.tokenizer=BertTokenizer.from_pretrained('/data1/users/fangyifan/Works/Paper_Code/pretrained/BiomedVLP-CXR-BERT-specialized', do_lower_case=True)
             # 这行代码的作用是初始化一个医学领域专用的BERT分词器，
             # 用于将原始文本转为模型可处理的token序列：
             # 能否用于描述肺部小结节位置的中文文本？
             # 是的，这个分词器可以用于处理描述肺部小结节位置的中文文本，
             # 但需要注意的是，它是基于英文医学文本训练的，可能对中文文本的处理效果不如专门针对中文训练的分词器。
-
+        
         self.register_buffer('steps', torch.Tensor([0]))
         # 这行代码的作用是注册一个名为'steps'的缓冲区，该缓冲区是一个张量，初始值为0。
         # 这个缓冲区用于跟踪训练的步数，并且在模型保存和加载时会被保留。
@@ -344,7 +344,7 @@ class CTClipTrainer(nn.Module):
             # 在这里，mask的形状为(batch_size, num_frames)，
             #text = text.to(device)
             text = list(text)
-            text_tokens=self.tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=512).to(device)
+            text_tokens=self.tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=384).to(device)
             # 这行代码的作用是将文本数据转换为模型可处理的token序列，
 
             #video = video

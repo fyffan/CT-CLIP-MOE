@@ -1,4 +1,4 @@
-Metadata-Version: 2.4
+Metadata-Version: 2.1
 Name: ct-clip
 Version: 0.1
 Summary: CT-CLIP
@@ -17,5 +17,3 @@ Requires-Dist: click
 Requires-Dist: appdirs
 Requires-Dist: attr
 Requires-Dist: nltk
-Dynamic: requires-dist
-Dynamic: summary

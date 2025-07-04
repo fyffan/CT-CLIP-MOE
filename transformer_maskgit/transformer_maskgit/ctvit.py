@@ -123,14 +123,36 @@ class TransformerEncoder(nn.Module):
         super().__init__()
         encoder_layer = nn.TransformerEncoderLayer(d_model=dim, nhead=heads, dim_feedforward=dim*mlp_ratio, batch_first=True)
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+    
     def forward(self, x):
         # x: [B, N, D]
-        return self.encoder(x)
+        out = self.encoder(x) + x
+        return out
 
+# class MoE(nn.Module):
+#     def __init__(self, dim, num_experts=4):
+#         super().__init__()
+#         self.experts = nn.ModuleList([nn.Linear(dim, dim) for _ in range(num_experts)])
+#         self.gate = nn.Linear(dim, num_experts)
+
+#     def forward(self, x):
+#         # x: [B, N, D]
+#         gate_scores = F.softmax(self.gate(x), dim=-1)  # [B, N, num_experts]
+#         expert_outs = torch.stack([expert(x) for expert in self.experts], dim=-2)  # [B, N, num_experts, D]
+#         out = (gate_scores.unsqueeze(-1) * expert_outs).sum(dim=-2)  # [B, N, D]
+#         return out
+    
 class MoE(nn.Module):
-    def __init__(self, dim, num_experts=4):
+    def __init__(self, dim, num_experts=4, ffn_ratio=4):
         super().__init__()
-        self.experts = nn.ModuleList([nn.Linear(dim, dim) for _ in range(num_experts)])
+        hidden_dim = dim * ffn_ratio
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, dim)
+            ) for _ in range(num_experts)
+        ])
         self.gate = nn.Linear(dim, num_experts)
 
     def forward(self, x):
@@ -150,6 +172,7 @@ class TransformerDecoder(nn.Module):
     def forward(self, memory):
         # memory: [B, N, D]
         B = memory.size(0)
+        # 扩展learnable_tokens到batch维度（本模型中batch size为1）
         tokens = self.learnable_tokens.expand(B, -1, -1)  # [B, token_num, D]
         out = self.decoder(tgt=tokens, memory=memory)
         return out
@@ -157,7 +180,16 @@ class TransformerDecoder(nn.Module):
 class TaskSpecificExperts(nn.Module):
     def __init__(self, dim, num_experts):
         super().__init__()
-        self.experts = nn.ModuleList([nn.Linear(dim, dim) for _ in range(num_experts)])
+        hidden_dim = dim * 4  # Example hidden dimension, can be adjusted
+        # self.experts = nn.ModuleList([nn.Linear(dim, dim) for _ in range(num_experts)])
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, dim)
+            ) for _ in range(num_experts)
+        ])
+    
     def forward(self, x):
         # x: [B, N, D]
         return [expert(x) for expert in self.experts]  # List of [B, N, D]
@@ -166,6 +198,7 @@ class DynamicRouting(nn.Module):
     def __init__(self, dim, num_experts):
         super().__init__()
         self.routing = nn.Linear(dim, num_experts)
+
     def forward(self, x):
         # x: [B, N, D]
         weights = F.softmax(self.routing(x), dim=-1)  # [B, N, num_experts]
@@ -174,13 +207,15 @@ class DynamicRouting(nn.Module):
 class Fusion(nn.Module):
     def __init__(self, dim, num_experts):
         super().__init__()
-        self.fusion = nn.Linear(dim * (num_experts + 1), dim)
+        self.fusion = nn.Linear(dim * 2, dim)
+
     def forward(self, expert_outputs, routing_weights, shared_expert):
         # expert_outputs: List of [B, N, D]
         # routing_weights: [B, N, num_experts]
         # shared_expert: [B, N, D]
         expert_stack = torch.stack(expert_outputs, dim=-2)  # [B, N, num_experts, D]
         weighted = (routing_weights.unsqueeze(-1) * expert_stack).sum(dim=-2)  # [B, N, D]
+        
         concat = torch.cat([weighted, shared_expert], dim=-1)  # [B, N, D*(num_experts+1)]
         return self.fusion(concat)  # [B, N, D]
 
