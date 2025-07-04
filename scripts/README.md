@@ -129,3 +129,10 @@ $ python tsne_latents.py
 ```
 
 
+
+
+# 代码解释
+## 数据集
+- 数据集的导入和预处理部分，可以参考data.py文件中的VideoDatasetWithLabels类部分
+## 模块
+- 新增模块定义在ctvit.py文件中，组装与训练逻辑在ct-clip.py中，不修改ctvit原本结构。
